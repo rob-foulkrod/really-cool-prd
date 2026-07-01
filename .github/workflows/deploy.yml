@@ -102,8 +102,8 @@ jobs:
         with:
           name: infrastructure
           path: infra/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
-          repository: ${{ github.repository }}
         uses: actions/download-artifact@v8
         with:
           name: infrastructure
@@ -155,8 +155,8 @@ jobs:
         with:
           name: published-app
           path: publish/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
-          repository: ${{ github.repository }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
