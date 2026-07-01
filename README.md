@@ -1,2 +1,2 @@
 # really-cool-prd
-But it's cool
+A .NET 10 MVC todo app with a provider-based in-memory backend and xUnit tests.
