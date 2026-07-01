@@ -1,6 +1,6 @@
 using './main.bicep'
 
-param location = 'eastus'
+param location = 'northcentralus'
 param environment = 'production'
 param resourceSuffix = 'prd'
 
