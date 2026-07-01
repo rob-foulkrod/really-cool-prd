@@ -13,8 +13,8 @@ param location string = resourceGroup().location
 @description('Unique suffix for resource names (e.g., "prd", "staging")')
 param resourceSuffix string = 'prd'
 
-@description('App Service Plan SKU (B1 = Standard with slot support)')
-param appServicePlanSku string = 'B1'
+@description('App Service Plan SKU (S1 = Standard with slot support)')
+param appServicePlanSku string = 'S1'
 
 var resourceBaseName = 'really-cool-${resourceSuffix}'
 var appServicePlanName = 'asp-${resourceBaseName}'
