@@ -1,0 +1,241 @@
+# ============================================================
+#  CI — Build & Verification Pipeline
+# ============================================================
+
+name: CI — Build & Verify
+
+on:
+  push:
+    branches: ["main", "feature/**"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  SOLUTION: "ReallyCoolPrd.slnx"
+
+# ─────────────────────────────────────────────────────────────
+# JOB 1 ── build
+#   Compiles the entire solution and verifies there are
+#   no compilation errors.  Uploads the publish output so
+#   downstream jobs (or a future deploy job) can reuse it
+#   without re-compiling.
+# ─────────────────────────────────────────────────────────────
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore NuGet packages
+        run: dotnet restore ${{ env.SOLUTION }}
+
+      - name: Build (no-restore, treat warnings as errors)
+        run: >
+          dotnet build ${{ env.SOLUTION }}
+          --no-restore
+          --configuration Release
+          -p:TreatWarningsAsErrors=true
+
+      - name: Publish web app
+        run: >
+          dotnet publish src/ReallyCoolPrd.Web/ReallyCoolPrd.Web.csproj
+          --no-build
+          --configuration Release
+          --output publish/
+
+      - name: Upload published app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: published-app
+          path: publish/
+          retention-days: 3
+
+# ─────────────────────────────────────────────────────────────
+# JOB 2 ── test-coverage   (parallel with build)
+#   Runs the full xUnit suite and collects Coverlet coverage
+#   in Cobertura XML format.  Then uses ReportGenerator to
+#   convert that into a human-readable HTML report and a
+#   plain-text summary that ends up in the Job Summary.
+# ─────────────────────────────────────────────────────────────
+  test-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore NuGet packages
+        run: dotnet restore ${{ env.SOLUTION }}
+
+      - name: Run tests with Coverlet (XPlat Code Coverage)
+        run: >
+          dotnet test ${{ env.SOLUTION }}
+          --no-restore
+          --configuration Release
+          --collect:"XPlat Code Coverage"
+          --results-directory ./test-results
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+
+      # ReportGenerator turns the Cobertura XML into HTML + a
+      # Markdown summary we can push into the GitHub Job Summary.
+      - name: Install ReportGenerator
+        run: >
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+
+      - name: Generate coverage report (HTML + Markdown)
+        run: >
+          reportgenerator
+          -reports:"test-results/**/coverage.cobertura.xml"
+          -targetdir:"coverage-report"
+          -reporttypes:"Html;MarkdownSummaryGithub;Cobertura"
+
+      # Pin the Markdown summary to the GitHub Actions Job Summary
+      # so reviewers see coverage right in the PR check panel.
+      - name: Post coverage summary to Job Summary
+        run: cat coverage-report/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload test results (TRX)
+        if: always()           # upload even when tests fail
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-trx
+          path: test-results/**/*.trx
+          retention-days: 7
+
+      - name: Upload Cobertura coverage XML
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-cobertura
+          path: test-results/**/coverage.cobertura.xml
+          retention-days: 7
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report-html
+          path: coverage-report/
+          retention-days: 7
+
+# ─────────────────────────────────────────────────────────────
+# JOB 3 ── code-quality   (parallel with build + test)
+#   Enforces code style with `dotnet format --verify-no-changes`.
+#   A non-zero exit code here fails the check, preventing
+#   unformatted code from merging.
+# ─────────────────────────────────────────────────────────────
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore NuGet packages
+        run: dotnet restore ${{ env.SOLUTION }}
+
+      - name: Verify code formatting (dotnet format)
+        run: >
+          dotnet format ${{ env.SOLUTION }}
+          --verify-no-changes
+          --verbosity diagnostic
+
+      # Run Roslyn analyzers as a separate build pass.
+      # ErrorsOnly keeps the log terse; any analyzer error fails CI.
+      - name: Run Roslyn analyzers
+        run: >
+          dotnet build ${{ env.SOLUTION }}
+          --no-restore
+          --configuration Release
+          -p:RunAnalyzersDuringBuild=true
+          -p:TreatWarningsAsErrors=true
+          -p:EnforceCodeStyleInBuild=true
+          --verbosity minimal
+
+# ─────────────────────────────────────────────────────────────
+# JOB 4 ── gather-results
+#   Waits for ALL three parallel jobs to complete (success or
+#   failure), then downloads every artifact and writes a
+#   consolidated summary to the GitHub Job Summary page.
+#   The job itself succeeds only when all upstreams succeed.
+# ─────────────────────────────────────────────────────────────
+  gather-results:
+    runs-on: ubuntu-latest
+    # Fan-in: this job starts only after all three parallel jobs finish.
+    needs: [build, test-coverage, code-quality]
+    # Run even if a parallel job failed — lets us show a partial report
+    # and surface ALL failures at once rather than stopping at the first.
+    if: always()
+
+    steps:
+      - name: Download published app
+        uses: actions/download-artifact@v8
+        with:
+          name: published-app
+          path: artifacts/published-app/
+        continue-on-error: true   # graceful if build job failed
+
+      - name: Download test results (TRX)
+        uses: actions/download-artifact@v8
+        with:
+          name: test-results-trx
+          path: artifacts/test-results/
+        continue-on-error: true
+
+      - name: Download Cobertura XML
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-cobertura
+          path: artifacts/coverage-xml/
+        continue-on-error: true
+
+      - name: Download HTML coverage report
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-report-html
+          path: artifacts/coverage-html/
+        continue-on-error: true
+
+      - name: List everything gathered
+        run: find artifacts/ -type f | sort
+
+      # Write a consolidated status block into the Job Summary.
+      # ${{ needs.<job>.result }} is 'success', 'failure', or 'skipped'.
+      - name: Write consolidated CI summary
+        run: |
+          echo "# CI Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔨 Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Test + Coverage | ${{ needs.test-coverage.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts retained for **3–7 days** per retention policy." >> $GITHUB_STEP_SUMMARY
+
+      # Fail this job (and the overall check) if any upstream failed.
+      - name: Fail if any job failed
+        if: >
+          needs.build.result == 'failure' ||
+          needs.test-coverage.result == 'failure' ||
+          needs.code-quality.result == 'failure'
+        run: |
+          echo "One or more parallel jobs failed. See the summary above."
+          exit 1
