@@ -13,6 +13,8 @@
 - Lab 5 - Publish Packages - https://github.com/skills/publish-packages
 - lab 6 - Write JavaScript Actions - https://github.com/skills/write-javascript-actions
 - Lab 7 - exercise use secrets - https://github.com/githubtraining/exercise-use-secrets
+- Lab 8 (?) Learn how to install GitHub Agentic Workflows and create an AI-powered workflow - https://github.com/skills/agentic-workflows-that-read-the-room
+- Lab 9 (?) Callable Workflow (YAML) - https://github.com/skills/reusable-workflows
 
 
 ## 🔗  Chat Links Reference
@@ -26,6 +28,7 @@
 | GitHub Workflow Steps Syntax                 | [Workflow Syntax – job steps](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_idsteps)                                | Reference for defining steps inside GitHub Actions workflows.            |
 | GitHub Contexts Reference                    | [Contexts reference - GitHub Docs](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)                                                       | Documentation for accessing workflow runtime context variables.          |
 | Azure OIDC Authentication for GitHub Actions | [Authenticate to Azure from GitHub Actions by OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)             | Guide for using OIDC to securely authenticate GitHub Actions with Azure. |
+
 
 
 
