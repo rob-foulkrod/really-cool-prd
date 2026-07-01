@@ -24,9 +24,9 @@ public class HealthController : ControllerBase
     {
         // Check for deployment error flag
         var deploymentError = _configuration["DEPLOYMENT_ERROR"];
-        
-        if (!string.IsNullOrEmpty(deploymentError) && 
-            bool.TryParse(deploymentError, out var isError) && 
+
+        if (!string.IsNullOrEmpty(deploymentError) &&
+            bool.TryParse(deploymentError, out var isError) &&
             isError)
         {
             _logger.LogError("Health check failed: DEPLOYMENT_ERROR is set to true");
