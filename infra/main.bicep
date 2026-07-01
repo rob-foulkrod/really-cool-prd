@@ -9,7 +9,6 @@
 // ============================================================
 
 param location string = resourceGroup().location
-param environment string = 'production'
 
 @description('Unique suffix for resource names (e.g., "prd", "staging")')
 param resourceSuffix string = 'prd'
@@ -22,8 +21,6 @@ var appServicePlanName = 'asp-${resourceBaseName}'
 var webAppName = 'app-${resourceBaseName}'
 var stagingSlotName = 'staging'
 var healthCheckPath = '/health'
-var healthCheckInterval = 60  // seconds
-var healthCheckThreshold = 3  // consecutive failures before unhealthy
 
 // ============================================================
 // App Service Plan
@@ -73,20 +70,11 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
 }
 
 // ============================================================
-// Health Check Configuration
-// ============================================================
-resource healthCheck 'Microsoft.Web/sites/config@2024-04-01' = {
-  name: '${webApp.name}/healthCheckPath'
-  properties: {
-    healthCheckPath: healthCheckPath
-  }
-}
-
-// ============================================================
 // Staging Slot (for blue-green deployment)
 // ============================================================
 resource stagingSlot 'Microsoft.Web/sites/slots@2024-04-01' = {
-  name: '${webApp.name}/${stagingSlotName}'
+  parent: webApp
+  name: stagingSlotName
   location: location
   kind: 'app,linux'
 
@@ -115,7 +103,8 @@ resource stagingSlot 'Microsoft.Web/sites/slots@2024-04-01' = {
 // Slot Swap Configuration (swap slots when ready)
 // ============================================================
 resource slotSwapConfig 'Microsoft.Web/sites/config@2024-04-01' = {
-  name: '${webApp.name}/slotConfigNames'
+  parent: webApp
+  name: 'slotConfigNames'
   properties: {
     appSettingNames: [
       'ASPNETCORE_ENVIRONMENT'
