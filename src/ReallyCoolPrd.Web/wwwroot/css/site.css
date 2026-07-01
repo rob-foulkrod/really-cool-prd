@@ -1,0 +1,66 @@
+:root {
+  --heatwave-dark: #33180f;
+  --heatwave-card: #fff4e8;
+  --heatwave-primary: #ff6a00;
+  --heatwave-secondary: #ff3d00;
+}
+
+html {
+  font-size: 14px;
+}
+
+@media (min-width: 768px) {
+  html {
+    font-size: 16px;
+  }
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: #3d1f0f;
+  background: radial-gradient(circle at top, #ffd5a3 0%, #ff9c5f 35%, #ff6a3d 100%);
+}
+
+.heatwave-nav {
+  background: linear-gradient(90deg, #52220e 0%, #8a2f0f 100%);
+}
+
+.heatwave-card {
+  border-radius: 1rem;
+  background: var(--heatwave-card);
+  box-shadow: 0 0.75rem 2rem rgba(61, 31, 15, 0.22);
+}
+
+.btn-heatwave {
+  color: #fff;
+  background-color: var(--heatwave-primary);
+  border-color: var(--heatwave-primary);
+}
+
+.btn-heatwave:hover,
+.btn-heatwave:focus {
+  color: #fff;
+  background-color: #e65f00;
+  border-color: #e65f00;
+}
+
+.btn-outline-heatwave {
+  color: var(--heatwave-secondary);
+  border-color: var(--heatwave-secondary);
+}
+
+.btn-outline-heatwave:hover,
+.btn-outline-heatwave:focus {
+  color: #fff;
+  background-color: var(--heatwave-secondary);
+}
+
+.todo-done {
+  text-decoration: line-through;
+  color: #8c5f4b;
+}
+
+.text-light-50 {
+  color: rgba(255, 255, 255, 0.75);
+}
