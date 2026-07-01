@@ -1,0 +1,328 @@
+# ============================================================
+#  CD — Deploy to Azure Web App (Production Environment)
+#
+#  Manual trigger (workflow_dispatch) for controlled deployments.
+#  Uses federated credentials (OIDC) with managed identity.
+#
+#  Flow:
+#    1. Deploy infrastructure (Bicep)
+#    2. Deploy app to staging slot
+#    3. Validate health check
+#    4. Swap staging → production
+# ============================================================
+
+name: CD — Deploy to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_name:
+        description: 'Deployment identifier (for logging)'
+        required: false
+        default: 'manual-deployment'
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  SOLUTION: "ReallyCoolPrd.slnx"
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  AZURE_MANAGED_IDENTITY_NAME: ${{ secrets.AZURE_MANAGED_IDENTITY_NAME }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+# ─────────────────────────────────────────────────────────────
+# Permissions for OIDC token issuance
+# ─────────────────────────────────────────────────────────────
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # JOB 1 ── validate-deployment
+  #   Ensures we have all required secrets/inputs before proceeding.
+  # ─────────────────────────────────────────────────────────────
+  validate-deployment:
+    name: "🔍 Validate Configuration"
+    runs-on: ubuntu-latest
+    outputs:
+      web_app_name: ${{ steps.config.outputs.web_app_name }}
+      staging_slot_url: ${{ steps.config.outputs.staging_slot_url }}
+    steps:
+      - name: Validate required secrets
+        run: |
+          if [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "❌ Missing AZURE_SUBSCRIPTION_ID secret"
+            exit 1
+          fi
+          if [ -z "$AZURE_RESOURCE_GROUP" ]; then
+            echo "❌ Missing AZURE_RESOURCE_GROUP secret"
+            exit 1
+          fi
+          if [ -z "$AZURE_MANAGED_IDENTITY_NAME" ]; then
+            echo "❌ Missing AZURE_MANAGED_IDENTITY_NAME secret"
+            exit 1
+          fi
+          if [ -z "$AZURE_TENANT_ID" ]; then
+            echo "❌ Missing AZURE_TENANT_ID secret"
+            exit 1
+          fi
+          if [ -z "$AZURE_CLIENT_ID" ]; then
+            echo "❌ Missing AZURE_CLIENT_ID secret"
+            exit 1
+          fi
+          echo "✅ All required secrets present"
+
+      - name: Set deployment configuration
+        id: config
+        run: |
+          web_app_name="app-really-cool-prd"
+          staging_slot_url="https://${web_app_name}-${GITHUB_RUN_ID}.azurewebsites.net"
+          echo "web_app_name=${web_app_name}" >> $GITHUB_OUTPUT
+          echo "staging_slot_url=${staging_slot_url}" >> $GITHUB_OUTPUT
+          echo "Deployment: ${{ github.event.inputs.deployment_name }}"
+          echo "Web App: ${web_app_name}"
+          echo "Subscription: ${AZURE_SUBSCRIPTION_ID}"
+          echo "Resource Group: ${AZURE_RESOURCE_GROUP}"
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2 ── deploy-infrastructure
+  #   Uses Bicep to provision Azure resources.
+  #   Authenticates to Azure via managed identity (OIDC federated credentials).
+  # ─────────────────────────────────────────────────────────────
+  deploy-infrastructure:
+    name: "🏗️ Deploy Infrastructure (Bicep)"
+    runs-on: ubuntu-latest
+    needs: validate-deployment
+    environment: production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: false
+
+      - name: Deploy Bicep template
+        run: |
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --parameters location="eastus" \
+            --parameters environment="production" \
+            --parameters resourceSuffix="prd"
+
+      - name: Capture deployment outputs
+        id: deployment
+        run: |
+          outputs=$(az deployment group show \
+            --name main \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query 'properties.outputs' -o json)
+          echo "outputs=${outputs}" >> $GITHUB_OUTPUT
+          echo "$outputs" | jq .
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 3 ── deploy-app-to-staging
+  #   Downloads published artifact and deploys to staging slot via Kudu.
+  #   Authenticates using OIDC-managed identity token (no publish profiles).
+  # ─────────────────────────────────────────────────────────────
+  deploy-app-to-staging:
+    name: "📦 Deploy App → Staging Slot"
+    runs-on: ubuntu-latest
+    needs: [validate-deployment, deploy-infrastructure]
+    environment: production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Download published app artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: published-app
+          path: publish/
+        continue-on-error: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: false
+
+      # If no artifact from CI, build locally
+      - name: Rebuild if no artifact found
+        if: failure()
+        run: |
+          dotnet publish src/ReallyCoolPrd.Web/ReallyCoolPrd.Web.csproj \
+            --configuration Release \
+            --output publish/
+
+      - name: Deploy to staging slot (OIDC + Kudu)
+        run: |
+          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          
+          # Zip the published app
+          cd publish
+          zip -r ../app.zip .
+          cd ..
+          
+          # Get access token using managed identity (OIDC authenticated)
+          token=$(az account get-access-token --query accessToken -o tsv)
+          
+          # Deploy using Kudu ZIP API with managed identity token
+          staging_url="https://${web_app_name}-staging.scm.azurewebsites.net"
+          
+          curl -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @app.zip \
+            "${staging_url}/api/zipdeploy"
+          
+          echo "✅ Deployed to staging slot using OIDC + managed identity"
+          echo "   App: https://${web_app_name}-staging.azurewebsites.net"
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 4 ── validate-health-check
+  #   Polls the staging slot's health endpoint with retries.
+  #   If health check fails, deployment is aborted.
+  # ─────────────────────────────────────────────────────────────
+  validate-health-check:
+    name: "🏥 Validate Health Check"
+    runs-on: ubuntu-latest
+    needs: [validate-deployment, deploy-app-to-staging]
+    environment: production
+
+    steps:
+      - name: Wait for staging app to warm up
+        run: sleep 15
+
+      - name: Check staging health endpoint
+        id: health
+        run: |
+          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          health_url="https://${web_app_name}-staging.azurewebsites.net/health"
+          
+          max_retries=5
+          retry_count=0
+          http_code=0
+          
+          while [ $retry_count -lt $max_retries ] && [ "$http_code" != "200" ]; do
+            echo "Health check attempt $((retry_count + 1))/$max_retries..."
+            
+            http_code=$(curl -s -o /tmp/health.json -w "%{http_code}" "$health_url")
+            
+            if [ "$http_code" = "200" ]; then
+              echo "✅ Health check passed (HTTP $http_code)"
+              cat /tmp/health.json | jq .
+              echo "health_status=healthy" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "❌ Health check failed (HTTP $http_code)"
+              cat /tmp/health.json 2>/dev/null || echo "No response body"
+              retry_count=$((retry_count + 1))
+              
+              if [ $retry_count -lt $max_retries ]; then
+                echo "Retrying in 30 seconds..."
+                sleep 30
+              fi
+            fi
+          done
+          
+          echo "❌ Health check failed after $max_retries attempts"
+          exit 1
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 5 ── swap-to-production
+  #   Swaps the staging slot into production after health validation.
+  # ─────────────────────────────────────────────────────────────
+  swap-to-production:
+    name: "🔄 Swap Staging → Production"
+    runs-on: ubuntu-latest
+    needs: [validate-deployment, validate-health-check]
+    environment: production
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: false
+
+      - name: Swap staging slot to production
+        run: |
+          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          
+          echo "Swapping staging → production for: $web_app_name"
+          
+          az webapp deployment slot swap \
+            --name "$web_app_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --slot staging
+          
+          echo "✅ Slot swap complete"
+
+      - name: Verify production health
+        run: |
+          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          prod_url="https://${web_app_name}.azurewebsites.net/health"
+          
+          sleep 10  # Allow time for DNS/LB to settle
+          
+          http_code=$(curl -s -o /tmp/prod_health.json -w "%{http_code}" "$prod_url")
+          
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Production health check passed!"
+            cat /tmp/prod_health.json | jq .
+          else
+            echo "⚠️ Production health check returned HTTP $http_code"
+            cat /tmp/prod_health.json 2>/dev/null || echo "No response"
+          fi
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 6 ── deployment-summary
+  #   Final job that runs after all others (success or failure).
+  # ─────────────────────────────────────────────────────────────
+  deployment-summary:
+    name: "📋 Deployment Summary"
+    runs-on: ubuntu-latest
+    needs: [validate-deployment, deploy-infrastructure, deploy-app-to-staging, validate-health-check, swap-to-production]
+    if: always()
+
+    steps:
+      - name: Write deployment summary
+        run: |
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validation | ${{ needs.validate-deployment.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure (Bicep) | ${{ needs.deploy-infrastructure.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy to Staging | ${{ needs.deploy-app-to-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health Check | ${{ needs.validate-health-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Swap to Production | ${{ needs.swap-to-production.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Web App**: ${{ needs.validate-deployment.outputs.web_app_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Resource Group**: ${{ env.AZURE_RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment**: ${{ github.event.inputs.deployment_name }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any job failed
+        if: >
+          needs.validate-deployment.result == 'failure' ||
+          needs.deploy-infrastructure.result == 'failure' ||
+          needs.deploy-app-to-staging.result == 'failure' ||
+          needs.validate-health-check.result == 'failure' ||
+          needs.swap-to-production.result == 'failure'
+        run: |
+          echo "❌ Deployment pipeline failed. See summary above."
+          exit 1
