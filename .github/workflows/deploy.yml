@@ -98,7 +98,7 @@ jobs:
 
     steps:
       - name: Download infrastructure (Bicep) artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure
           path: infra/
@@ -146,7 +146,7 @@ jobs:
 
     steps:
       - name: Download published app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: published-app
           path: publish/
