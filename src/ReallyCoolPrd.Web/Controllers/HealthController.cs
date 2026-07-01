@@ -20,8 +20,6 @@ public class HealthController : ControllerBase
     }
 
     [HttpGet]
-    [ProduceResponseType(typeof(object), StatusCodes.Status200OK)]
-    [ProduceResponseType(typeof(object), StatusCodes.Status500InternalServerError)]
     public IActionResult Get()
     {
         // Check for deployment error flag
