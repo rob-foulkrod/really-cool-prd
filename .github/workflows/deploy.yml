@@ -104,11 +104,6 @@ jobs:
           path: infra/
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
-        uses: actions/download-artifact@v8
-        with:
-          name: infrastructure
-          path: infra/
-          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
