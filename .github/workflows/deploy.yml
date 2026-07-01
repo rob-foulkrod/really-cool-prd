@@ -129,7 +129,10 @@ jobs:
             --name main \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --query 'properties.outputs' -o json)
-          echo "outputs=${outputs}" >> $GITHUB_OUTPUT
+          # Encode JSON as single line for GITHUB_OUTPUT
+          outputs_escaped=$(echo "$outputs" | jq -c .)
+          echo "outputs=${outputs_escaped}" >> $GITHUB_OUTPUT
+          echo "Deployment outputs captured:"
           echo "$outputs" | jq .
 
   # ─────────────────────────────────────────────────────────────
