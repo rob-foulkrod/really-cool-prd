@@ -97,12 +97,15 @@ jobs:
     environment: production
 
     steps:
-      - name: Debug workflow_run event
+      - name: Download infrastructure (Bicep) artifacts using GitHub CLI
         run: |
-          echo "Triggered by workflow_run: ${{ github.event.workflow_run.id }}"
-          echo "Triggered by workflow_run conclusion: ${{ github.event.workflow_run.conclusion }}"
-
-      - name: Download infrastructure (Bicep) artifacts
+          mkdir -p infra/
+          gh run download ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --name infrastructure \
+            --dir infra/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: actions/download-artifact@v8
         with:
           name: infrastructure
@@ -149,12 +152,15 @@ jobs:
     environment: production
 
     steps:
-      - name: Download published app artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: published-app
-          path: publish/
-          run-id: ${{ github.event.workflow_run.id }}
+      - name: Download published app artifact using GitHub CLI
+        run: |
+          mkdir -p publish/
+          gh run download ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --name published-app \
+            --dir publish/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
