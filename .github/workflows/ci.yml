@@ -170,16 +170,40 @@ jobs:
           --verbosity minimal
 
 # ─────────────────────────────────────────────────────────────
-# JOB 4 ── gather-results
-#   Waits for ALL three parallel jobs to complete (success or
+# JOB 4 ── validate-infrastructure   (parallel with build + test + code-quality)
+#   Validates Bicep infrastructure templates and uploads them
+#   as an artifact for the CD pipeline to use without checking out.
+# ─────────────────────────────────────────────────────────────
+  validate-infrastructure:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Validate Bicep templates
+        run: |
+          az bicep build infra/main.bicep
+          echo "✅ Bicep template validated successfully"
+
+      - name: Upload infrastructure artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: infrastructure
+          path: infra/
+          retention-days: 3
+
+# ─────────────────────────────────────────────────────────────
+# JOB 5 ── gather-results
+#   Waits for ALL four parallel jobs to complete (success or
 #   failure), then downloads every artifact and writes a
 #   consolidated summary to the GitHub Job Summary page.
 #   The job itself succeeds only when all upstreams succeed.
 # ─────────────────────────────────────────────────────────────
   gather-results:
     runs-on: ubuntu-latest
-    # Fan-in: this job starts only after all three parallel jobs finish.
-    needs: [build, test-coverage, code-quality]
+    # Fan-in: this job starts only after all four parallel jobs finish.
+    needs: [build, test-coverage, code-quality, validate-infrastructure]
     # Run even if a parallel job failed — lets us show a partial report
     # and surface ALL failures at once rather than stopping at the first.
     if: always()
@@ -227,6 +251,7 @@ jobs:
           echo "| 🔨 Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🧪 Test + Coverage | ${{ needs.test-coverage.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ✅ Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🏗️ Infrastructure (Bicep) | ${{ needs.validate-infrastructure.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Artifacts retained for **3–7 days** per retention policy." >> $GITHUB_STEP_SUMMARY
 
@@ -235,7 +260,8 @@ jobs:
         if: >
           needs.build.result == 'failure' ||
           needs.test-coverage.result == 'failure' ||
-          needs.code-quality.result == 'failure'
+          needs.code-quality.result == 'failure' ||
+          needs.validate-infrastructure.result == 'failure'
         run: |
           echo "One or more parallel jobs failed. See the summary above."
           exit 1

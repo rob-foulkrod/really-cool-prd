@@ -14,12 +14,10 @@
 name: CD — Deploy to Azure
 
 on:
-  workflow_dispatch:
-    inputs:
-      deployment_name:
-        description: 'Deployment identifier (for logging)'
-        required: false
-        default: 'manual-deployment'
+  workflow_run:
+    workflows: ["CI — Build & Verify"]
+    branches: [main]
+    types: [completed]
 
 env:
   DOTNET_VERSION: "10.0.x"
@@ -45,6 +43,8 @@ jobs:
   validate-deployment:
     name: "🔍 Validate Configuration"
     runs-on: ubuntu-latest
+    # Only deploy if CI succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     outputs:
       web_app_name: ${{ steps.config.outputs.web_app_name }}
       staging_slot_url: ${{ steps.config.outputs.staging_slot_url }}
@@ -97,8 +97,12 @@ jobs:
     environment: production
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v7
+      - name: Download infrastructure (Bicep) artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: infrastructure
+          path: infra/
+          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -140,15 +144,12 @@ jobs:
     environment: production
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v7
-
       - name: Download published app artifact
         uses: actions/download-artifact@v8
         with:
           name: published-app
           path: publish/
-        continue-on-error: true
+          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -157,14 +158,6 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: false
-
-      # If no artifact from CI, build locally
-      - name: Rebuild if no artifact found
-        if: failure()
-        run: |
-          dotnet publish src/ReallyCoolPrd.Web/ReallyCoolPrd.Web.csproj \
-            --configuration Release \
-            --output publish/
 
       - name: Deploy to staging slot (OIDC + Kudu)
         run: |
