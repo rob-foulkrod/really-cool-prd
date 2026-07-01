@@ -97,6 +97,11 @@ jobs:
     environment: production
 
     steps:
+      - name: Debug workflow_run event
+        run: |
+          echo "Triggered by workflow_run: ${{ github.event.workflow_run.id }}"
+          echo "Triggered by workflow_run conclusion: ${{ github.event.workflow_run.conclusion }}"
+
       - name: Download infrastructure (Bicep) artifacts
         uses: actions/download-artifact@v8
         with:
