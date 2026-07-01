@@ -45,9 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     # Only deploy if CI succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    outputs:
-      web_app_name: ${{ steps.config.outputs.web_app_name }}
-      staging_slot_url: ${{ steps.config.outputs.staging_slot_url }}
     steps:
       - name: Validate required secrets
         run: |
@@ -73,17 +70,11 @@ jobs:
           fi
           echo "✅ All required secrets present"
 
-      - name: Set deployment configuration
-        id: config
+      - name: Log deployment info
         run: |
-          web_app_name="app-really-cool-prd"
-          staging_slot_url="https://${web_app_name}-${GITHUB_RUN_ID}.azurewebsites.net"
-          echo "web_app_name=${web_app_name}" >> $GITHUB_OUTPUT
-          echo "staging_slot_url=${staging_slot_url}" >> $GITHUB_OUTPUT
-          echo "Deployment: ${{ github.event.inputs.deployment_name }}"
-          echo "Web App: ${web_app_name}"
           echo "Subscription: ${AZURE_SUBSCRIPTION_ID}"
           echo "Resource Group: ${AZURE_RESOURCE_GROUP}"
+          echo "Infrastructure deployment will provide web app details..."
 
   # ─────────────────────────────────────────────────────────────
   # JOB 2 ── deploy-infrastructure
@@ -95,6 +86,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate-deployment
     environment: production
+    outputs:
+      web_app_name: ${{ steps.deployment.outputs.webAppName }}
+      web_app_url: ${{ steps.deployment.outputs.webAppDefaultHostName }}
+      staging_slot_name: ${{ steps.deployment.outputs.stagingSlotName }}
 
     steps:
       - name: Download infrastructure (Bicep) artifacts
@@ -129,9 +124,17 @@ jobs:
             --name main \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --query 'properties.outputs' -o json)
-          # Encode JSON as single line for GITHUB_OUTPUT
-          outputs_escaped=$(echo "$outputs" | jq -c .)
-          echo "outputs=${outputs_escaped}" >> $GITHUB_OUTPUT
+          
+          # Extract individual values from Bicep outputs
+          webAppName=$(echo "$outputs" | jq -r '.webAppName.value')
+          webAppDefaultHostName=$(echo "$outputs" | jq -r '.webAppDefaultHostName.value')
+          stagingSlotName=$(echo "$outputs" | jq -r '.stagingSlotName.value')
+          
+          # Export as job outputs
+          echo "webAppName=${webAppName}" >> $GITHUB_OUTPUT
+          echo "webAppDefaultHostName=${webAppDefaultHostName}" >> $GITHUB_OUTPUT
+          echo "stagingSlotName=${stagingSlotName}" >> $GITHUB_OUTPUT
+          
           echo "Deployment outputs captured:"
           echo "$outputs" | jq .
 
@@ -165,7 +168,7 @@ jobs:
 
       - name: Deploy to staging slot (OIDC + Kudu)
         run: |
-          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          web_app_name="${{ needs.deploy-infrastructure.outputs.web_app_name }}"
           
           # Zip the published app
           cd publish
@@ -195,7 +198,7 @@ jobs:
   validate-health-check:
     name: "🏥 Validate Health Check"
     runs-on: ubuntu-latest
-    needs: [validate-deployment, deploy-app-to-staging]
+    needs: [deploy-infrastructure, deploy-app-to-staging]
     environment: production
 
     steps:
@@ -205,7 +208,7 @@ jobs:
       - name: Check staging health endpoint
         id: health
         run: |
-          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          web_app_name="${{ needs.deploy-infrastructure.outputs.web_app_name }}"
           health_url="https://${web_app_name}-staging.azurewebsites.net/health"
           
           max_retries=5
@@ -244,7 +247,7 @@ jobs:
   swap-to-production:
     name: "🔄 Swap Staging → Production"
     runs-on: ubuntu-latest
-    needs: [validate-deployment, validate-health-check]
+    needs: [deploy-infrastructure, validate-health-check]
     environment: production
 
     steps:
@@ -258,7 +261,7 @@ jobs:
 
       - name: Swap staging slot to production
         run: |
-          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          web_app_name="${{ needs.deploy-infrastructure.outputs.web_app_name }}"
           
           echo "Swapping staging → production for: $web_app_name"
           
@@ -271,7 +274,7 @@ jobs:
 
       - name: Verify production health
         run: |
-          web_app_name="${{ needs.validate-deployment.outputs.web_app_name }}"
+          web_app_name="${{ needs.deploy-infrastructure.outputs.web_app_name }}"
           prod_url="https://${web_app_name}.azurewebsites.net/health"
           
           sleep 10  # Allow time for DNS/LB to settle
@@ -309,7 +312,7 @@ jobs:
           echo "| Health Check | ${{ needs.validate-health-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Swap to Production | ${{ needs.swap-to-production.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Web App**: ${{ needs.validate-deployment.outputs.web_app_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Web App**: ${{ needs.deploy-infrastructure.outputs.web_app_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Resource Group**: ${{ env.AZURE_RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
           echo "**Deployment**: ${{ github.event.inputs.deployment_name }}" >> $GITHUB_STEP_SUMMARY
 
