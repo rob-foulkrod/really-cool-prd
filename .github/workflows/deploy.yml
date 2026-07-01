@@ -120,7 +120,6 @@ jobs:
             --template-file infra/main.bicep \
             --parameters infra/main.bicepparam \
             --parameters location="northcentralus" \
-            --parameters environment="production" \
             --parameters resourceSuffix="prd"
 
       - name: Capture deployment outputs

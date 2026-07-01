@@ -1,7 +1,6 @@
 using './main.bicep'
 
 param location = 'northcentralus'
-param environment = 'production'
 param resourceSuffix = 'prd'
 
 // This will be set by the deployment workflow via -c parameter
