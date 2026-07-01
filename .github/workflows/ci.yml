@@ -183,7 +183,7 @@ jobs:
 
       - name: Validate Bicep templates
         run: |
-          az bicep build infra/main.bicep
+          az bicep build --file infra/main.bicep
           echo "✅ Bicep template validated successfully"
 
       - name: Upload infrastructure artifact
